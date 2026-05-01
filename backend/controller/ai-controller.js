@@ -1,7 +1,7 @@
 import dotenv from "dotenv";
 dotenv.config();
 
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import Question from "../models/question-model.js";
 import Session from "../models/session-model.js";
 import {
@@ -9,59 +9,51 @@ import {
   questionAnswerPrompt,
 } from "../utils/prompts-util.js";
 
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+// CHANGE 1: apiVersion add kar diya
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY, {
+  apiVersion: "v1"
+});
 
-// @desc    Generate + SAVE interview questions for a session
-// @route   POST /api/ai/generate-questions
-// @access  Private
+// @desc Generate + SAVE interview questions for a session
+// @route POST /api/ai/generate-questions
+// @access Private
 export const generateInterviewQuestions = async (req, res) => {
   console.log("hi");
   try {
-    const { sessionId } = req.body; //! read sessionId, not role/experience
+    const { sessionId } = req.body;
 
     if (!sessionId) {
-      return res
-        .status(400)
-        .json({ success: false, message: "sessionId is required" });
+      return res.status(400).json({ success: false, message: "sessionId is required" });
     }
 
-    //? 1. fetch session → get role, experience, topicsToFocus
     const session = await Session.findById(sessionId);
     if (!session) {
-      return res
-        .status(404)
-        .json({ success: false, message: "Session not found" });
+      return res.status(404).json({ success: false, message: "Session not found" });
     }
 
-    if (session.user.toString() !== req.user._id.toString()) {
-      return res
-        .status(403)
-        .json({ success: false, message: "Not authorized" });
+    if (session.user.toString()!== req.user._id.toString()) {
+      return res.status(403).json({ success: false, message: "Not authorized" });
     }
 
     const { role, experience, topicsToFocus } = session;
     console.log("session: ", session);
 
-    //? 2. generate via Gemini
     const prompt = questionAnswerPrompt(role, experience, topicsToFocus, 10);
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: prompt,
-    });
-    console.log("response: ", response);
 
-    const parts = response.candidates?.[0]?.content?.parts ?? [];
-    const rawText = parts
-      .filter((p) => !p.thought) // gemini-2.5-flash includes thinking parts; skip them
-      .map((p) => p.text ?? "")
-      .join("");
+    // CHANGE 2: Model name fix kar diya
+    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+    const result = await model.generateContent(prompt);
+    const response = result.response;
+    const rawText = response.text();
+
+    console.log("AI RESPONSE:", rawText);
 
     const cleanedText = rawText
-      .replace(/^```json\s*/, "")
-      .replace(/^```\s*/, "")
-      .replace(/```$/, "")
-      .replace(/^json\s*/, "")
-      .trim();
+    .replace(/^```json\s*/, "")
+    .replace(/^```\s*/, "")
+    .replace(/```$/, "")
+    .replace(/^json\s*/, "")
+    .trim();
 
     let questions;
     try {
@@ -74,7 +66,6 @@ export const generateInterviewQuestions = async (req, res) => {
 
     if (!Array.isArray(questions)) throw new Error("Response is not an array");
 
-    //! 4. save to DB — was completely missing before
     const saved = await Question.insertMany(
       questions.map((q) => ({
         session: sessionId,
@@ -85,13 +76,14 @@ export const generateInterviewQuestions = async (req, res) => {
       })),
     );
 
-    //! 5. attach IDs to session
     session.questions.push(...saved.map((q) => q._id));
     await session.save();
 
-    res.status(201).json({ success: true, data: saved });
+    const updatedSession = await Session.findById(sessionId).populate("questions");
+    res.status(201).json({ success: true, session: updatedSession });
+
   } catch (error) {
-    console.error(error);
+    console.error("AI ERROR:", error);
     res.status(500).json({
       success: false,
       message: "Failed to generate questions",
@@ -100,43 +92,34 @@ export const generateInterviewQuestions = async (req, res) => {
   }
 };
 
-// @desc    Generate explanation for an interview question
-// @route   POST /api/ai/generate-explanation
-// @access  Private
+// @desc Generate explanation for an interview question
+// @route POST /api/ai/generate-explanation
+// @access Private
 export const generateConceptExplanation = async (req, res) => {
   try {
     const { question } = req.body;
-
     if (!question) {
-      return res.status(400).json({
-        success: false,
-        message: "Question is required",
-      });
+      return res.status(400).json({ success: false, message: "Question is required" });
     }
 
     const prompt = conceptExplainPrompt(question);
 
-    const response = await ai.models.generateContent({
-      model: "gemini-2.0-flash-lite",
-      contents: prompt,
-    });
+    // CHANGE 3: Yahan bhi model name fix kar diya
+    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+    const result = await model.generateContent(prompt);
+    const rawText = result.response.text();
 
-    let rawText = response.text;
-
-    // Clean it: Remove backticks, json markers, and any extra formatting
     const cleanedText = rawText
-      .replace(/^```json\s*/, "")
-      .replace(/^```\s*/, "")
-      .replace(/```$/, "")
-      .replace(/^json\s*/, "")
-      .trim();
+    .replace(/^```json\s*/, "")
+    .replace(/^```\s*/, "")
+    .replace(/```$/, "")
+    .replace(/^json\s*/, "")
+    .trim();
 
-    // Parse the cleaned JSON
     let explanation;
     try {
       explanation = JSON.parse(cleanedText);
     } catch (parseError) {
-      // If parsing fails, try to extract JSON object from text
       const jsonMatch = cleanedText.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
         explanation = JSON.parse(jsonMatch[0]);
@@ -145,17 +128,11 @@ export const generateConceptExplanation = async (req, res) => {
       }
     }
 
-    // Validate the response structure
-    if (!explanation.title || !explanation.explanation) {
-      throw new Error(
-        "Response missing required fields: title and explanation",
-      );
+    if (!explanation.title ||!explanation.explanation) {
+      throw new Error("Response missing required fields: title and explanation");
     }
 
-    res.status(200).json({
-      success: true,
-      data: explanation,
-    });
+    res.status(200).json({ success: true, data: explanation });
   } catch (error) {
     console.error(error);
     res.status(500).json({
@@ -168,13 +145,8 @@ export const generateConceptExplanation = async (req, res) => {
 
 export const getSessionById = async (req, res) => {
   try {
-    const session = await Session.findById(req.params.id).populate("questions"); // ← this was missing
-
-    if (!session)
-      return res
-        .status(404)
-        .json({ success: false, message: "Session not found" });
-
+    const session = await Session.findById(req.params.id).populate("questions");
+    if (!session) return res.status(404).json({ success: false, message: "Session not found" });
     res.status(200).json({ success: true, session });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });

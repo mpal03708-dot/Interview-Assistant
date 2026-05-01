@@ -1,25 +1,19 @@
+import User from "../models/user-model.js";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
-import User from "../models/user-model.js";
 
-// Generate JWT Token
 const generateToken = (userId) => {
-  return jwt.sign({ id: userId }, process.env.JWT_SECRET, {
-    expiresIn: "7d",
-  });
+  // ✅ FIX #1: process.env.JWT_SECRET use kar
+  return jwt.sign({ userId }, process.env.JWT_SECRET, { expiresIn: "7d" });
 };
 
-// @desc    Register a new user
-// @route   POST /api/auth/register
-// @access  Public
+// register
 export const registerUser = async (req, res) => {
   try {
-    const { name, email, password, profileImageUrl } = req.body;
+    const { name, email, password } = req.body;
 
     if (!name || !email || !password) {
-      return res
-        .status(400)
-        .json({ message: "Please provide all required fields" });
+      return res.status(400).json({ message: "Please provide all required fields" });
     }
 
     const userExists = await User.findOne({ email });
@@ -35,42 +29,46 @@ export const registerUser = async (req, res) => {
       name,
       email,
       password: hashedPassword,
-      profileImageUrl: profileImageUrl || null,
     });
 
     res.status(201).json({
       _id: user._id,
       name: user.name,
       email: user.email,
-      profileImageUrl: user.profileImageUrl,
       token: generateToken(user._id),
     });
   } catch (error) {
+    console.log("REGISTER ERROR:", error.message); // ← LOG ADD KIYA
     res.status(500).json({ message: error.message });
   }
 };
 
-// @desc    Login user
-// @route   POST /api/auth/login
-// @access  Public
+// login
 export const loginUser = async (req, res) => {
+  console.log("🔥 LOGIN HIT:", req.body); // ← LOG #1
+  
   try {
     const { email, password } = req.body;
-
+    
+    console.log("🔍 Email:", email); // ← LOG #2
+    
     const user = await User.findOne({ email });
+    console.log("👤 User mila:", user ? user.email : "NULL"); // ← LOG #3
 
     if (user && (await bcrypt.compare(password, user.password))) {
+      console.log("✅ LOGIN SUCCESS"); // ← LOG #4
       res.json({
         _id: user._id,
         name: user.name,
         email: user.email,
-        profileImageUrl: user.profileImageUrl,
         token: generateToken(user._id),
       });
     } else {
+      console.log("❌ Invalid credentials"); // ← LOG #5
       res.status(401).json({ message: "Invalid email or password" });
     }
   } catch (error) {
+    console.log("💥 LOGIN CRASH:", error.message); // ← LOG #6 - ASLI ERROR
     res.status(500).json({ message: error.message });
   }
 };

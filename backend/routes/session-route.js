@@ -1,3 +1,4 @@
+import { protect } from "../middlewares/auth-middleware.js";
 import express from "express";
 import {
   createSession,
