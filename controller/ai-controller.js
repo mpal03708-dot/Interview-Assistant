@@ -41,7 +41,7 @@ export const generateInterviewQuestions = async (req, res) => {
     const prompt = questionAnswerPrompt(role, experience, topicsToFocus, 10);
 
     // CHANGE 2: Model name fix kar diya
-    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-pro" });
     const result = await model.generateContent(prompt);
     const response = result.response;
     const rawText = response.text();
@@ -105,7 +105,7 @@ export const generateConceptExplanation = async (req, res) => {
     const prompt = conceptExplainPrompt(question);
 
     // CHANGE 3: Yahan bhi model name fix kar diya
-    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-pro" });
     const result = await model.generateContent(prompt);
     const rawText = result.response.text();
 
