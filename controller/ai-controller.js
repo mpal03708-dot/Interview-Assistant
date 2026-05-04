@@ -1,7 +1,7 @@
 import dotenv from "dotenv";
 dotenv.config();
 
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import Groq from "groq-sdk";
 import Question from "../models/question-model.js";
 import Session from "../models/session-model.js";
 import {
@@ -9,16 +9,13 @@ import {
   questionAnswerPrompt,
 } from "../utils/prompts-util.js";
 
-// CHANGE 1: apiVersion add kar diya
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY, {
-  apiVersion: "v1"
+const groq = new Groq({
+  apiKey: process.env.GROQ_API_KEY,
 });
 
 // @desc Generate + SAVE interview questions for a session
-// @route POST /api/ai/generate-questions
-// @access Private
 export const generateInterviewQuestions = async (req, res) => {
-  console.log("hi");
+  console.log("Groq API Call Started");
   try {
     const { sessionId } = req.body;
 
@@ -40,31 +37,31 @@ export const generateInterviewQuestions = async (req, res) => {
 
     const prompt = questionAnswerPrompt(role, experience, topicsToFocus, 10);
 
-    // CHANGE 2: Model name fix kar diya
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-pro" });
-    const result = await model.generateContent(prompt);
-    const response = result.response;
-    const rawText = response.text();
+    const completion = await groq.chat.completions.create({
+      model: "llama-3.1-8b-instant",
+      messages: [
+        {
+          role: "system",
+          content: "You are an expert interview question generator. You must respond with valid JSON only. Do not include markdown, explanations, or code blocks."
+        },
+        {
+          role: "user",
+          content: prompt
+        }
+      ],
+      response_format: { type: "json_object" },
+      temperature: 0.7,
+    });
 
+    const rawText = completion.choices[0].message.content;
     console.log("AI RESPONSE:", rawText);
 
-    const cleanedText = rawText
-    .replace(/^```json\s*/, "")
-    .replace(/^```\s*/, "")
-    .replace(/```$/, "")
-    .replace(/^json\s*/, "")
-    .trim();
+    const parsed = JSON.parse(rawText);
+    const questions = parsed.questions;
 
-    let questions;
-    try {
-      questions = JSON.parse(cleanedText);
-    } catch {
-      const jsonMatch = cleanedText.match(/\[[\s\S]*\]/);
-      if (jsonMatch) questions = JSON.parse(jsonMatch[0]);
-      else throw new Error("Failed to parse AI response as JSON");
+    if (!Array.isArray(questions)) {
+      throw new Error("Response does not contain questions array");
     }
-
-    if (!Array.isArray(questions)) throw new Error("Response is not an array");
 
     const saved = await Question.insertMany(
       questions.map((q) => ({
@@ -93,8 +90,6 @@ export const generateInterviewQuestions = async (req, res) => {
 };
 
 // @desc Generate explanation for an interview question
-// @route POST /api/ai/generate-explanation
-// @access Private
 export const generateConceptExplanation = async (req, res) => {
   try {
     const { question } = req.body;
@@ -104,29 +99,24 @@ export const generateConceptExplanation = async (req, res) => {
 
     const prompt = conceptExplainPrompt(question);
 
-    // CHANGE 3: Yahan bhi model name fix kar diya
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-pro" });
-    const result = await model.generateContent(prompt);
-    const rawText = result.response.text();
+    const completion = await groq.chat.completions.create({
+      model: "llama-3.1-8b-instant",
+      messages: [
+        {
+          role: "system",
+          content: "You are an expert teacher. You must respond with valid JSON only. Do not include markdown or explanations outside JSON."
+        },
+        {
+          role: "user",
+          content: prompt
+        }
+      ],
+      response_format: { type: "json_object" },
+      temperature: 0.7,
+    });
 
-    const cleanedText = rawText
-    .replace(/^```json\s*/, "")
-    .replace(/^```\s*/, "")
-    .replace(/```$/, "")
-    .replace(/^json\s*/, "")
-    .trim();
-
-    let explanation;
-    try {
-      explanation = JSON.parse(cleanedText);
-    } catch (parseError) {
-      const jsonMatch = cleanedText.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        explanation = JSON.parse(jsonMatch[0]);
-      } else {
-        throw new Error("Failed to parse AI response as JSON");
-      }
-    }
+    const rawText = completion.choices[0].message.content;
+    const explanation = JSON.parse(rawText);
 
     if (!explanation.title ||!explanation.explanation) {
       throw new Error("Response missing required fields: title and explanation");
