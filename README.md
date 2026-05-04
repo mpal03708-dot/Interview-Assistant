@@ -48,9 +48,6 @@ npm start
 
 ---
 
-📷 Screenshots
-
-(Add your project screenshots here)
 
 ---
 
